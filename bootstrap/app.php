@@ -26,8 +26,19 @@ return Application::configure(basePath: dirname(__DIR__))
         $schedule->job(new SendMedicationReminderJob)->everyMinute();
     })
     ->withMiddleware(function (Middleware $middleware): void {
-        // Middleware de Sanctum para SPA stateful
-        $middleware->statefulApi();
+        // NO usar statefulApi(): esta app se autentica 100% con tokens Bearer
+        // de Sanctum (el frontend guarda el token y lo manda en el header
+        // Authorization — ver front/src/lib/axios.ts). statefulApi() activa
+        // el modo SPA por cookies + sesión para peticiones cuyo Origin
+        // coincide con SANCTUM_STATEFUL_DOMAINS, lo que fuerza el stack de
+        // CSRF de la sesión web — y como el frontend nunca pide el cookie de
+        // /sanctum/csrf-cookie ni envía withCredentials, toda petición
+        // POST/PUT/PATCH/DELETE termina en "CSRF token mismatch" (419).
+
+        // Esta app no tiene ruta web "login" — sin esto, un guest sin
+        // Accept: application/json recibe un 500 (RouteNotFoundException al
+        // intentar redirigir a route('login')) en vez de un 401 limpio.
+        $middleware->redirectGuestsTo(fn () => null);
 
         // Nota: el grupo "api" ya aplica throttle:api por defecto (usa el
         // rate limiter "api" definido abajo, respaldado por CACHE_STORE).

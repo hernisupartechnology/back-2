@@ -170,6 +170,16 @@ return [
         'claimed_date' => 'fecha de reclamo',
         'intake_quantity_per_dose' => 'cantidad por toma',
         'recurrence_days' => 'días de recurrencia',
+        'file' => 'archivo',
+        'title' => 'título',
+        'document_type' => 'tipo de documento',
+        'vaccine_name' => 'nombre de la vacuna',
+        'application_date' => 'fecha de aplicación',
+        'next_dose_date' => 'fecha de la próxima dosis',
+        'leave_type' => 'tipo de incapacidad',
+        'reason' => 'motivo',
+        'specialty' => 'especialidad',
+        'exam_type' => 'tipo de examen',
     ],
 
 ];
