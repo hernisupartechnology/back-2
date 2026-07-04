@@ -49,6 +49,10 @@ Route::middleware('auth:sanctum')->group(function () {
     // Perfil del usuario autenticado
     Route::put('/auth/profile', [ProfileController::class, 'update']);
     Route::post('/auth/profile/avatar', [ProfileController::class, 'updateAvatar']);
+    Route::get('/auth/profile/vital-sign-range', [ProfileController::class, 'vitalSignRange']);
+    Route::put('/auth/profile/vital-sign-range', [ProfileController::class, 'updateVitalSignRange']);
+    Route::get('/auth/profile/export', [ProfileController::class, 'export']);
+    Route::delete('/auth/account', [ProfileController::class, 'destroyAccount']);
 
     // ── Hogares ─────────────────────────────────────────────────────────────
     Route::prefix('households')->group(function () {
@@ -108,6 +112,7 @@ Route::middleware('auth:sanctum')->group(function () {
     });
 
     // ── Push subscriptions ──────────────────────────────────────────────────
+    Route::get('/push-subscriptions', [PushSubscriptionController::class, 'index']);
     Route::post('/push-subscriptions', [PushSubscriptionController::class, 'store']);
     Route::delete('/push-subscriptions', [PushSubscriptionController::class, 'destroy']);
 

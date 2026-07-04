@@ -10,7 +10,7 @@ use Minishlink\WebPush\WebPush;
 
 /**
  * Envía notificaciones push (Web Push API) a los dispositivos suscritos de un usuario.
- * Si las llaves VAPID no están configuradas (desarrollo local sin `php artisan webpush:vapid`),
+ * Si las llaves VAPID no están configuradas en .env (ver README, sección "Notificaciones push"),
  * se omite el envío silenciosamente — la app sigue funcionando solo con notificaciones in-app.
  */
 class PushNotificationService
