@@ -63,6 +63,22 @@ return [
     | will be used by the PHP date and date-time functions. The timezone
     | is set to "UTC" by default as it is suitable for most use cases.
     |
+    | IMPORTANTE: se mantiene en 'UTC' a propósito (no 'America/Bogota').
+    | Eloquent guarda datetimes como strings "naive" (sin timezone) y los
+    | reinterpreta usando este mismo timezone al leerlos — si la app manda
+    | un string ISO con 'Z' explícito (ej. new Date().toISOString(), como
+    | hace el frontend para taken_at/scheduled_datetime de las tomas),
+    | Carbon respeta ese 'Z' al escribir pero el valor guardado se
+    | reinterpreta con ESTE timezone al leer, desincronizando el dato en
+    | exactamente el offset de zona horaria. Probado en vivo: con
+    | 'America/Bogota' aquí, registrar una toma quedaba guardada 5 horas
+    | corrida. La conversión de "hora que el usuario escribió" a UTC debe
+    | hacerse en el FRONTEND (donde sí se conoce con certeza el timezone
+    | real del navegador) antes de mandarla a la API — ver
+    | fromDateTimeInputValue() en statusHelpers.ts. Para tareas programadas
+    | que deban correr en hora Colombia, usar ->timezone('America/Bogota')
+    | explícito en la definición del schedule (bootstrap/app.php), no
+    | cambiar este valor global.
     */
 
     'timezone' => 'UTC',

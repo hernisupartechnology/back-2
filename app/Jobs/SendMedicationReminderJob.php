@@ -26,7 +26,7 @@ class SendMedicationReminderJob implements ShouldQueue
     public function handle(PushNotificationService $push): void
     {
         $now = Carbon::now();
-        $today = Carbon::today();
+        $today = Carbon::today('America/Bogota');
         $isoWeekday = $today->dayOfWeekIso;
 
         $schedules = MedicationSchedule::where('is_active', true)
@@ -41,18 +41,21 @@ class SendMedicationReminderJob implements ShouldQueue
 
         $userIds = $schedules->pluck('user_id')->unique()->all();
 
+        // Ver comentario equivalente en MedicationIntakeService::todayIntakesFor() —
+        // scheduled_datetime se guarda/lee en UTC (app.timezone=UTC), así que el
+        // emparejamiento por string debe normalizarse a UTC en ambos lados.
         $existingLogs = MedicationIntakeLog::whereIn('user_id', $userIds)
-            ->whereDate('scheduled_datetime', $today->toDateString())
+            ->whereBetween('scheduled_datetime', [$today->copy()->utc(), $today->copy()->addDay()->utc()])
             ->get()
-            ->keyBy(fn (MedicationIntakeLog $log) => $log->medication_id.'|'.$log->scheduled_datetime->format('Y-m-d H:i:s'));
+            ->keyBy(fn (MedicationIntakeLog $log) => $log->medication_id.'|'.$log->scheduled_datetime->copy()->utc()->format('Y-m-d H:i:s'));
 
         $todayNotifications = Notification::whereIn('user_id', $userIds)
-            ->whereDate('created_at', $today->toDateString())
+            ->whereBetween('created_at', [$today->copy()->utc(), $today->copy()->addDay()->utc()])
             ->get();
 
         foreach ($schedules as $schedule) {
             $scheduledAt = $today->copy()->setTimeFromTimeString((string) $schedule->time_of_day);
-            $logKey = $schedule->medication_id.'|'.$scheduledAt->format('Y-m-d H:i:s');
+            $logKey = $schedule->medication_id.'|'.$scheduledAt->copy()->utc()->format('Y-m-d H:i:s');
 
             // Ya se registró esta toma (tomada, omitida o pospuesta) — nada que recordar.
             if ($existingLogs->has($logKey)) {

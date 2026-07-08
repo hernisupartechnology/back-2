@@ -22,7 +22,12 @@ class MedicationIntakeService
     /** @param  array<int>  $userIds */
     public function todayIntakesFor(array $userIds): Collection
     {
-        $today = Carbon::today();
+        // 'America/Bogota' explícito (no el default de app.timezone=UTC): "hoy" y los
+        // horarios de toma (time_of_day, ej. "08:00") son conceptos de calendario/reloj
+        // del usuario colombiano, no de UTC — combinarlos con la fecha UTC correría las
+        // tomas 5 horas. app.timezone se mantiene en UTC a propósito para que Eloquent
+        // no desincronice los datetimes ya guardados (ver comentario en config/app.php).
+        $today = Carbon::today('America/Bogota');
         $isoWeekday = $today->dayOfWeekIso; // 1=lunes ... 7=domingo
         $now = Carbon::now();
 
@@ -37,15 +42,21 @@ class MedicationIntakeService
             return collect();
         }
 
+        // $today está en America/Bogota, pero scheduled_datetime se guarda/lee en UTC
+        // (app.timezone=UTC) — comparar/emparejar por fecha o por string formateado
+        // debe normalizarse SIEMPRE al mismo timezone en ambos lados, o dos Carbon que
+        // representan el mismo instante producen strings distintos (ej. "07:00" en
+        // Bogota vs "12:00" en UTC) y el emparejamiento falla en silencio: una toma ya
+        // registrada se seguía mostrando como pendiente porque nunca "encontraba" su log.
         $existingLogs = MedicationIntakeLog::whereIn('user_id', $userIds)
-            ->whereDate('scheduled_datetime', $today->toDateString())
+            ->whereBetween('scheduled_datetime', [$today->copy()->utc(), $today->copy()->addDay()->utc()])
             ->get()
-            ->keyBy(fn (MedicationIntakeLog $log) => $log->medication_id.'|'.$log->scheduled_datetime->format('Y-m-d H:i:s'));
+            ->keyBy(fn (MedicationIntakeLog $log) => $log->medication_id.'|'.$log->scheduled_datetime->copy()->utc()->format('Y-m-d H:i:s'));
 
         return $schedules
             ->map(function (MedicationSchedule $schedule) use ($today, $existingLogs, $now) {
                 $scheduledDatetime = $today->copy()->setTimeFromTimeString((string) $schedule->time_of_day);
-                $key = $schedule->medication_id.'|'.$scheduledDatetime->format('Y-m-d H:i:s');
+                $key = $schedule->medication_id.'|'.$scheduledDatetime->copy()->utc()->format('Y-m-d H:i:s');
                 $log = $existingLogs->get($key);
 
                 return [
@@ -159,7 +170,7 @@ class MedicationIntakeService
             ->groupBy(fn (MedicationIntakeLog $log) => $log->scheduled_datetime->toDateString());
 
         $streak = 0;
-        $cursor = Carbon::today();
+        $cursor = Carbon::today('America/Bogota');
 
         if (! $byDay->has($cursor->toDateString())) {
             $cursor->subDay();

@@ -19,8 +19,11 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withSchedule(function (Schedule $schedule): void {
         // Revisa citas, medicamentos, exámenes, remisiones y vacunas
-        // vencidas o próximas a vencer, y genera notificaciones. 7:00 AM.
-        $schedule->job(new CheckHealthAlertsJob)->dailyAt('07:00');
+        // vencidas o próximas a vencer, y genera notificaciones. 7:00 AM
+        // hora Colombia — app.timezone se mantiene en UTC (ver config/app.php),
+        // así que esta tarea necesita su propio timezone explícito o correría
+        // a las 7:00 UTC (2:00 a.m. Colombia).
+        $schedule->job(new CheckHealthAlertsJob)->dailyAt('07:00')->timezone('America/Bogota');
 
         // Envía recordatorios push de tomas de medicamentos próximas.
         $schedule->job(new SendMedicationReminderJob)->everyMinute();

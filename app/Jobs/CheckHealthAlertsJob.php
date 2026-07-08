@@ -28,7 +28,7 @@ class CheckHealthAlertsJob implements ShouldQueue
 
     public function handle(): void
     {
-        $this->today = Carbon::today();
+        $this->today = Carbon::today('America/Bogota');
 
         $this->checkAppointments();
         $this->checkMedications();
@@ -170,7 +170,7 @@ class CheckHealthAlertsJob implements ShouldQueue
     {
         $alreadySent = Notification::where('user_id', $userId)
             ->where('type', $type)
-            ->whereDate('created_at', $this->today->toDateString())
+            ->whereBetween('created_at', [$this->today->copy()->utc(), $this->today->copy()->addDay()->utc()])
             ->get()
             ->contains(fn (Notification $n) => ($n->data['model_id'] ?? null) === $modelId);
 

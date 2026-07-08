@@ -35,7 +35,7 @@ class TrafficLightService
             return ['level' => 'yellow', 'label' => 'Reprogramada — sin nueva fecha'];
         }
 
-        $today = Carbon::today();
+        $today = Carbon::today('America/Bogota');
         $diffDays = $today->diffInDays($appointment->appointment_date->copy()->startOfDay(), false);
 
         if ($diffDays < 0) {
@@ -55,8 +55,8 @@ class TrafficLightService
     private function forNeed(Appointment $appointment): array
     {
         $urgency = $appointment->need_urgency;
-        $registeredDate = $appointment->need_registered_date ?? Carbon::today();
-        $daysElapsed = $registeredDate->copy()->startOfDay()->diffInDays(Carbon::today(), false);
+        $registeredDate = $appointment->need_registered_date ?? Carbon::today('America/Bogota');
+        $daysElapsed = $registeredDate->copy()->startOfDay()->diffInDays(Carbon::today('America/Bogota'), false);
 
         if ($urgency === 'urgente') {
             return ['level' => 'red', 'label' => 'Urgente — agendar hoy'];
