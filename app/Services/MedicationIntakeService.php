@@ -164,10 +164,16 @@ class MedicationIntakeService
     /** Días consecutivos hacia atrás sin ninguna toma omitida ese día. */
     private function currentStreak(Medication $medication): int
     {
+        // scheduled_datetime se lee en UTC (app.timezone) — agrupar con toDateString()
+        // sin convertir antes usa el día calendario de UTC, no el de Bogotá. Como
+        // Bogotá va 5h detrás de UTC, cualquier toma programada después de las 7pm
+        // hora Colombia ya cae en el día UTC siguiente, y aparecía "adelantada" un
+        // día en la racha/calendario. Hay que convertir a America/Bogota ANTES de
+        // sacar la fecha.
         $byDay = MedicationIntakeLog::where('medication_id', $medication->id)
             ->orderByDesc('scheduled_datetime')
             ->get()
-            ->groupBy(fn (MedicationIntakeLog $log) => $log->scheduled_datetime->toDateString());
+            ->groupBy(fn (MedicationIntakeLog $log) => $log->scheduled_datetime->copy()->timezone('America/Bogota')->toDateString());
 
         $streak = 0;
         $cursor = Carbon::today('America/Bogota');
@@ -191,11 +197,19 @@ class MedicationIntakeService
     /** Calendario de adherencia del mes — un punto por día con tomas registradas. */
     private function monthCalendar(Medication $medication, int $month, int $year): array
     {
+        // whereYear/whereMonth filtran contra la columna cruda en UTC — el mismo
+        // desfase de "un día adelantado" de currentStreak() aplicaría también acá
+        // (y en el límite de mes, una toma de la última noche del mes podría quedar
+        // fuera del mes que pidió el usuario). Se calcula el rango del mes en
+        // America/Bogota y se convierte a UTC para la consulta; el agrupamiento por
+        // día también convierte antes de leer la fecha.
+        $start = Carbon::create($year, $month, 1, 0, 0, 0, 'America/Bogota');
+        $end = $start->copy()->addMonthNoOverflow();
+
         $byDay = MedicationIntakeLog::where('medication_id', $medication->id)
-            ->whereYear('scheduled_datetime', $year)
-            ->whereMonth('scheduled_datetime', $month)
+            ->whereBetween('scheduled_datetime', [$start->copy()->utc(), $end->copy()->utc()])
             ->get()
-            ->groupBy(fn (MedicationIntakeLog $log) => $log->scheduled_datetime->toDateString());
+            ->groupBy(fn (MedicationIntakeLog $log) => $log->scheduled_datetime->copy()->timezone('America/Bogota')->toDateString());
 
         $calendar = [];
 
