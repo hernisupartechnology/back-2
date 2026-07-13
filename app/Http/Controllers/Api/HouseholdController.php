@@ -5,12 +5,15 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\HouseholdResource;
 use App\Http\Resources\UserResource;
+use App\Mail\HouseholdInvitationMail;
 use App\Models\Household;
 use App\Models\HouseholdInvitation;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Validation\Rule;
 
 /**
  * Controlador de hogares — gestión de miembros, invitaciones y roles.
@@ -112,6 +115,77 @@ class HouseholdController extends Controller
     }
 
     /**
+     * Crear directamente un "perfil gestionado" — un familiar sin correo ni
+     * contraseña propios (niños, adultos mayores, cualquiera que no vaya a
+     * usar la app por su cuenta). El owner administra toda su información
+     * médica; este perfil nunca podrá iniciar sesión por sí mismo.
+     */
+    public function createManagedMember(Request $request, int $id): JsonResponse
+    {
+        $hogar = Household::findOrFail($id);
+        $this->authorize('manage', $hogar);
+
+        $data = $request->validate([
+            'name' => 'required|string|max:100',
+            'phone' => 'nullable|string|max:20',
+            'birthdate' => 'nullable|date|before:today',
+            'gender' => 'nullable|in:masculino,femenino,otro',
+            'blood_type' => 'nullable|in:A+,A-,B+,B-,O+,O-,AB+,AB-',
+            'eps' => 'nullable|string|max:255',
+            'ips_preferida' => 'nullable|string|max:255',
+            'numero_afiliado' => 'nullable|string|max:255',
+            'is_minor' => 'sometimes|boolean',
+            'supervised_by' => ['nullable', 'integer', Rule::exists('users', 'id')->where('household_id', $id)],
+        ]);
+
+        $miembro = User::create([
+            ...$data,
+            'household_id' => $id,
+            'role' => 'viewer',
+            'is_managed' => true,
+            'email' => null,
+            'password' => null,
+        ]);
+
+        return response()->json([
+            'message' => "{$miembro->name} fue agregado al hogar.",
+            'member' => new UserResource($miembro),
+        ], 201);
+    }
+
+    /**
+     * Editar el perfil de un miembro gestionado — como no puede iniciar
+     * sesión, no puede usar `ProfileController::update()` (solo opera sobre
+     * el usuario autenticado); el owner/supervisor lo edita por él.
+     */
+    public function updateManagedMember(Request $request, int $id, int $userId): JsonResponse
+    {
+        $miembro = User::where('id', $userId)->where('household_id', $id)->where('is_managed', true)->firstOrFail();
+
+        abort_unless($request->user()->canManage($miembro), 403, 'No tienes acceso a este perfil.');
+
+        $data = $request->validate([
+            'name' => 'sometimes|string|max:100',
+            'phone' => 'nullable|string|max:20',
+            'birthdate' => 'nullable|date|before:today',
+            'gender' => 'nullable|in:masculino,femenino,otro',
+            'blood_type' => 'nullable|in:A+,A-,B+,B-,O+,O-,AB+,AB-',
+            'eps' => 'nullable|string|max:255',
+            'ips_preferida' => 'nullable|string|max:255',
+            'numero_afiliado' => 'nullable|string|max:255',
+            'is_minor' => 'sometimes|boolean',
+            'supervised_by' => ['nullable', 'integer', Rule::exists('users', 'id')->where('household_id', $id)],
+        ]);
+
+        $miembro->update($data);
+
+        return response()->json([
+            'message' => "Perfil de {$miembro->name} actualizado correctamente.",
+            'member' => new UserResource($miembro->fresh()),
+        ]);
+    }
+
+    /**
      * Invitar a un miembro por correo electrónico.
      */
     public function invite(Request $request): JsonResponse
@@ -131,10 +205,10 @@ class HouseholdController extends Controller
             'invited_by' => $usuario->id,
         ]);
 
-        // TODO: enviar correo con el token — se implementa en Fase 5
+        Mail::to($invitacion->email)->send(new HouseholdInvitationMail($invitacion->load(['household', 'invitedBy'])));
 
         return response()->json([
-            'message' => "Invitación enviada a {$request->email}. El código es: {$invitacion->token}",
+            'message' => "Invitación enviada a {$request->email}.",
             'invitation' => $invitacion,
         ], 201);
     }

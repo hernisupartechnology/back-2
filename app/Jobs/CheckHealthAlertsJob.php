@@ -13,12 +13,20 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 
 /**
  * Corre diariamente a las 7:00 AM (Scheduler). Revisa citas, medicamentos,
  * exámenes, remisiones y vacunas vencidas o próximas a vencer, genera
  * notificaciones in-app y actualiza automáticamente los estados que
  * expiran por tiempo (medicamentos vencidos, remisiones vencidas).
+ *
+ * Nota de escala: este job recorre TODA la plataforma (no un solo hogar) una
+ * vez al día, así que su costo crece con el número total de usuarios, no por
+ * hogar. Las consultas de cada check* están acotadas en SQL a lo que
+ * realmente puede disparar una notificación (ver comentarios puntuales), y
+ * se usa `each()` (chunking automático de Laravel) en vez de `get()` para no
+ * cargar la tabla completa en memoria de una sola vez.
  */
 class CheckHealthAlertsJob implements ShouldQueue
 {
@@ -26,9 +34,23 @@ class CheckHealthAlertsJob implements ShouldQueue
 
     private Carbon $today;
 
+    /**
+     * "user_id|type|model_id" de todo lo ya notificado hoy — precargado UNA
+     * sola vez al inicio del job. Antes, notifyOnce() consultaba esto con una
+     * query por cada cita/medicamento/remisión/examen/vacuna activa en TODA
+     * la plataforma (N queries por corrida, una por fila revisada); ahora es
+     * una sola query y el resto es un chequeo en memoria.
+     */
+    private Collection $notifiedToday;
+
     public function handle(): void
     {
         $this->today = Carbon::today('America/Bogota');
+
+        $this->notifiedToday = Notification::whereBetween('created_at', [$this->today->copy()->utc(), $this->today->copy()->addDay()->utc()])
+            ->get(['user_id', 'type', 'data'])
+            ->map(fn (Notification $n) => $n->user_id.'|'.$n->type.'|'.($n->data['model_id'] ?? ''))
+            ->flip();
 
         $this->checkAppointments();
         $this->checkMedications();
@@ -39,9 +61,21 @@ class CheckHealthAlertsJob implements ShouldQueue
 
     private function checkAppointments(): void
     {
-        $active = Appointment::whereNotIn('status', ['realizada', 'cancelada', 'no_asistio'])->get();
+        // Todas las condiciones de abajo solo pueden dispararse para: una
+        // "necesidad" sin agendar, una cita reprogramada (sin importar su
+        // fecha), o una cita cuya fecha cae mañana/ayer. Cualquier otra cita
+        // activa (programada meses en el futuro, por ejemplo) nunca hace
+        // match con ningún notifyOnce() de abajo — acotar acá en SQL evita
+        // traer años de historial de citas de toda la plataforma a memoria
+        // solo para descartarlas una por una en PHP.
+        $active = Appointment::whereNotIn('status', ['realizada', 'cancelada', 'no_asistio'])
+            ->where(function ($q) {
+                $q->where('is_need', true)
+                    ->orWhere('status', 'reprogramada')
+                    ->orWhereBetween('appointment_date', [$this->today->copy()->subDay(), $this->today->copy()->addDays(2)]);
+            });
 
-        foreach ($active as $appointment) {
+        $active->each(function (Appointment $appointment) {
             if ($appointment->is_need) {
                 $daysElapsed = $appointment->need_registered_date
                     ? $appointment->need_registered_date->copy()->startOfDay()->diffInDays($this->today, false)
@@ -58,11 +92,11 @@ class CheckHealthAlertsJob implements ShouldQueue
                         '🟡 Agenda pronto tu cita', "Se acerca el plazo para agendar tu cita de {$appointment->specialty}.", 'warning');
                 }
 
-                continue;
+                return;
             }
 
             if (! $appointment->appointment_date) {
-                continue;
+                return;
             }
 
             $appointmentDay = $appointment->appointment_date->copy()->startOfDay();
@@ -79,33 +113,31 @@ class CheckHealthAlertsJob implements ShouldQueue
                 $this->notifyOnce($appointment->user_id, 'appointment.reprogramada_pending', Appointment::class, $appointment->id,
                     '🟡 Cita reprogramada sin nueva fecha', "Tu cita de {$appointment->specialty} sigue sin una nueva fecha desde hace más de 10 días.", 'warning');
             }
-        }
+        });
     }
 
     private function checkMedications(): void
     {
-        $recurring = Medication::where('is_recurring', true)
+        Medication::where('is_recurring', true)
             ->whereNotIn('status', ['completado', 'suspendido'])
             ->whereNotNull('end_date')
-            ->get();
+            ->each(function (Medication $medication) {
+                $daysLeft = $medication->days_until_expiration;
+                if ($daysLeft === null) {
+                    return;
+                }
 
-        foreach ($recurring as $medication) {
-            $daysLeft = $medication->days_until_expiration;
-            if ($daysLeft === null) {
-                continue;
-            }
-
-            if ($daysLeft < 0) {
-                $this->notifyOnce($medication->user_id, 'medication.expired', Medication::class, $medication->id,
-                    '🔴 Medicamento vencido', "{$medication->name} venció sin renovar.", 'danger');
-            } elseif ($daysLeft <= 3) {
-                $this->notifyOnce($medication->user_id, 'medication.expiring_soon', Medication::class, $medication->id,
-                    '🔴 Renovación urgente', "{$medication->name} vence en {$daysLeft} día(s).", 'danger');
-            } elseif ($daysLeft <= $medication->alert_days_before) {
-                $this->notifyOnce($medication->user_id, 'medication.renewal_reminder', Medication::class, $medication->id,
-                    '🟡 Renovación próxima', "{$medication->name} vence en {$daysLeft} día(s).", 'warning');
-            }
-        }
+                if ($daysLeft < 0) {
+                    $this->notifyOnce($medication->user_id, 'medication.expired', Medication::class, $medication->id,
+                        '🔴 Medicamento vencido', "{$medication->name} venció sin renovar.", 'danger');
+                } elseif ($daysLeft <= 3) {
+                    $this->notifyOnce($medication->user_id, 'medication.expiring_soon', Medication::class, $medication->id,
+                        '🔴 Renovación urgente', "{$medication->name} vence en {$daysLeft} día(s).", 'danger');
+                } elseif ($daysLeft <= $medication->alert_days_before) {
+                    $this->notifyOnce($medication->user_id, 'medication.renewal_reminder', Medication::class, $medication->id,
+                        '🟡 Renovación próxima', "{$medication->name} vence en {$daysLeft} día(s).", 'warning');
+                }
+            });
 
         // autorizado sin reclamar y con el tratamiento ya vencido → vencido automático
         Medication::where('status', 'autorizado')
@@ -135,26 +167,25 @@ class CheckHealthAlertsJob implements ShouldQueue
 
     private function checkReferrals(): void
     {
-        $authorized = Referral::where('status', 'autorizada')->whereNotNull('authorization_expiry_date')->get();
+        Referral::where('status', 'autorizada')->whereNotNull('authorization_expiry_date')
+            ->each(function (Referral $referral) {
+                $daysLeft = $referral->days_until_expiration;
+                if ($daysLeft === null) {
+                    return;
+                }
 
-        foreach ($authorized as $referral) {
-            $daysLeft = $referral->days_until_expiration;
-            if ($daysLeft === null) {
-                continue;
-            }
-
-            if ($daysLeft < 0) {
-                $referral->update(['status' => 'vencida']);
-                $this->notifyOnce($referral->user_id, 'referral.expired', Referral::class, $referral->id,
-                    '🔴 Remisión vencida', "La remisión a {$referral->specialty} venció sin ser usada.", 'danger');
-            } elseif ($daysLeft <= 5) {
-                $this->notifyOnce($referral->user_id, 'referral.expiring_urgent', Referral::class, $referral->id,
-                    '🔴 Remisión por vencer', "La remisión a {$referral->specialty} vence en {$daysLeft} día(s).", 'danger');
-            } elseif ($daysLeft <= 15) {
-                $this->notifyOnce($referral->user_id, 'referral.expiring_soon', Referral::class, $referral->id,
-                    '🟡 Remisión sin agendar', "La remisión a {$referral->specialty} vence en {$daysLeft} día(s).", 'warning');
-            }
-        }
+                if ($daysLeft < 0) {
+                    $referral->update(['status' => 'vencida']);
+                    $this->notifyOnce($referral->user_id, 'referral.expired', Referral::class, $referral->id,
+                        '🔴 Remisión vencida', "La remisión a {$referral->specialty} venció sin ser usada.", 'danger');
+                } elseif ($daysLeft <= 5) {
+                    $this->notifyOnce($referral->user_id, 'referral.expiring_urgent', Referral::class, $referral->id,
+                        '🔴 Remisión por vencer', "La remisión a {$referral->specialty} vence en {$daysLeft} día(s).", 'danger');
+                } elseif ($daysLeft <= 15) {
+                    $this->notifyOnce($referral->user_id, 'referral.expiring_soon', Referral::class, $referral->id,
+                        '🟡 Remisión sin agendar', "La remisión a {$referral->specialty} vence en {$daysLeft} día(s).", 'warning');
+                }
+            });
     }
 
     private function checkVaccinations(): void
@@ -168,13 +199,9 @@ class CheckHealthAlertsJob implements ShouldQueue
     /** Crea la notificación solo si no se envió una igual hoy (evita duplicados si el job se re-ejecuta). */
     private function notifyOnce(int $userId, string $type, string $modelType, int $modelId, string $title, string $body, string $priority): void
     {
-        $alreadySent = Notification::where('user_id', $userId)
-            ->where('type', $type)
-            ->whereBetween('created_at', [$this->today->copy()->utc(), $this->today->copy()->addDay()->utc()])
-            ->get()
-            ->contains(fn (Notification $n) => ($n->data['model_id'] ?? null) === $modelId);
+        $key = $userId.'|'.$type.'|'.$modelId;
 
-        if ($alreadySent) {
+        if ($this->notifiedToday->has($key)) {
             return;
         }
 
@@ -186,5 +213,9 @@ class CheckHealthAlertsJob implements ShouldQueue
             'data' => ['model_type' => $modelType, 'model_id' => $modelId],
             'priority' => $priority,
         ]);
+
+        // Marca en memoria también — evita crear duplicados si esta misma
+        // corrida del job vuelve a llamar notifyOnce() con la misma clave.
+        $this->notifiedToday->put($key, true);
     }
 }

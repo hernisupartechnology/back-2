@@ -30,7 +30,10 @@ class VaccinationController extends Controller
             $query->where('vaccine_name', 'like', '%'.$request->string('name').'%');
         }
         if ($request->filled('year')) {
-            $query->whereYear('application_date', $request->integer('year'));
+            // whereBetween en vez de whereYear(): whereYear() envuelve la columna en
+            // una función SQL, lo que impide usar el índice (user_id, application_date).
+            $year = $request->integer('year');
+            $query->whereBetween('application_date', ["{$year}-01-01", "{$year}-12-31"]);
         }
 
         return VaccinationResource::collection($query->orderByDesc('application_date')->get());

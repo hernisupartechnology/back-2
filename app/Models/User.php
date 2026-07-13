@@ -17,10 +17,11 @@ use Laravel\Sanctum\HasApiTokens;
  *
  * @property int $id
  * @property string $name
- * @property string $email
+ * @property string|null $email null en perfiles gestionados (ver $is_managed)
  * @property string $role owner | member | viewer
  * @property int|null $household_id
  * @property bool $is_minor
+ * @property bool $is_managed perfil creado por el owner, sin login propio (niños, adultos mayores, etc.)
  * @property int|null $supervised_by
  */
 class User extends Authenticatable
@@ -30,7 +31,7 @@ class User extends Authenticatable
     /** @var list<string> */
     protected $fillable = [
         'name', 'email', 'password', 'avatar',
-        'role', 'household_id',
+        'role', 'household_id', 'is_managed',
         'phone', 'birthdate', 'gender',
         'blood_type', 'eps', 'ips_preferida', 'numero_afiliado',
         'is_minor', 'supervised_by',
@@ -47,6 +48,7 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'birthdate' => 'date',
             'is_minor' => 'boolean',
+            'is_managed' => 'boolean',
             'track_vital_signs' => 'boolean',
             'dark_mode' => 'boolean',
             'password' => 'hashed',

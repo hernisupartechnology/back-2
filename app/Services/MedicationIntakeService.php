@@ -6,6 +6,7 @@ use App\Models\Medication;
 use App\Models\MedicationIntakeLog;
 use App\Models\MedicationSchedule;
 use Carbon\Carbon;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 
 /**
@@ -118,61 +119,92 @@ class MedicationIntakeService
         return $this->displayStatusForVirtual($log->scheduled_datetime, $now);
     }
 
-    /** @return array<string, mixed> */
+    /**
+     * @return array<string, mixed>
+     *
+     * Nota de escala: para un medicamento crónico tomado a diario durante
+     * años, `MedicationIntakeLog::where('medication_id', ...)` puede tener
+     * miles de filas. Antes esta función traía TODAS esas filas a PHP (hasta
+     * 3 veces: 7 días, mes, histórico completo) solo para contarlas — ahora
+     * los conteos y porcentajes se calculan con agregados SQL
+     * (COUNT/SUM/GROUP BY), sin traer una sola fila de contenido a memoria.
+     */
     public function adherenceStats(Medication $medication, ?int $month = null, ?int $year = null): array
     {
         $month = $month ?? now()->month;
         $year = $year ?? now()->year;
 
-        $logs7d = MedicationIntakeLog::where('medication_id', $medication->id)
-            ->where('scheduled_datetime', '>=', now()->subDays(7))
-            ->get();
+        $base = fn () => MedicationIntakeLog::where('medication_id', $medication->id);
 
-        $logsMonth = MedicationIntakeLog::where('medication_id', $medication->id)
-            ->whereYear('scheduled_datetime', $year)
-            ->whereMonth('scheduled_datetime', $month)
-            ->get();
-
-        $logsAll = MedicationIntakeLog::where('medication_id', $medication->id)->get();
+        $counts = (clone $base())
+            ->selectRaw('status, count(*) as total')
+            ->groupBy('status')
+            ->pluck('total', 'status');
 
         return [
-            'adherence_7d' => $this->adherencePercent($logs7d),
-            'adherence_month' => $this->adherencePercent($logsMonth),
-            'adherence_total' => $this->adherencePercent($logsAll),
+            'adherence_7d' => $this->adherencePercent((clone $base())->where('scheduled_datetime', '>=', now()->subDays(7))),
+            'adherence_month' => $this->adherencePercent(
+                (clone $base())->whereYear('scheduled_datetime', $year)->whereMonth('scheduled_datetime', $month)
+            ),
+            'adherence_total' => $this->adherencePercent($base()),
             'counts' => [
-                'tomado' => $logsAll->where('status', 'tomado')->count(),
-                'atrasado' => $logsAll->where('status', 'atrasado')->count(),
-                'omitido' => $logsAll->where('status', 'omitido')->count(),
-                'pospuesto' => $logsAll->where('status', 'pospuesto')->count(),
+                'tomado' => (int) ($counts['tomado'] ?? 0),
+                'atrasado' => (int) ($counts['atrasado'] ?? 0),
+                'omitido' => (int) ($counts['omitido'] ?? 0),
+                'pospuesto' => (int) ($counts['pospuesto'] ?? 0),
             ],
             'current_streak' => $this->currentStreak($medication),
             'calendar' => $this->monthCalendar($medication, $month, $year),
         ];
     }
 
-    private function adherencePercent(Collection $logs): float
+    /** % de tomas con status tomado/atrasado sobre el total, calculado en SQL (sin traer filas). */
+    private function adherencePercent(Builder $query): float
     {
-        if ($logs->isEmpty()) {
+        $row = $query->selectRaw("count(*) as total, sum(case when status in ('tomado','atrasado') then 1 else 0 end) as taken")->first();
+
+        if (! $row || (int) $row->total === 0) {
             return 0.0;
         }
 
-        $taken = $logs->whereIn('status', ['tomado', 'atrasado'])->count();
-
-        return round(($taken / $logs->count()) * 100, 1);
+        return round(((int) $row->taken / (int) $row->total) * 100, 1);
     }
 
-    /** Días consecutivos hacia atrás sin ninguna toma omitida ese día. */
+    /**
+     * Días consecutivos hacia atrás sin ninguna toma omitida ese día.
+     *
+     * Nota de escala: un medicamento crónico tomado a diario durante años
+     * acumula miles de logs — cargarlos TODOS solo para contar unos pocos
+     * días de racha hacia atrás no escala. Se consulta primero una ventana
+     * amplia (400 días, muy por encima de cualquier racha "actual" realista)
+     * y solo si esa ventana entera resulta sin huecos (caso raro) se repite
+     * la consulta sin límite — así el caso común es barato y el caso raro
+     * sigue siendo correcto.
+     */
     private function currentStreak(Medication $medication): int
     {
+        $windowDays = 400;
+        $streak = $this->streakWithinWindow($medication, Carbon::today('America/Bogota')->subDays($windowDays));
+
+        return $streak >= $windowDays
+            ? $this->streakWithinWindow($medication, null)
+            : $streak;
+    }
+
+    private function streakWithinWindow(Medication $medication, ?Carbon $since): int
+    {
+        $query = MedicationIntakeLog::where('medication_id', $medication->id)->orderByDesc('scheduled_datetime');
+        if ($since) {
+            $query->where('scheduled_datetime', '>=', $since->copy()->utc());
+        }
+
         // scheduled_datetime se lee en UTC (app.timezone) — agrupar con toDateString()
         // sin convertir antes usa el día calendario de UTC, no el de Bogotá. Como
         // Bogotá va 5h detrás de UTC, cualquier toma programada después de las 7pm
         // hora Colombia ya cae en el día UTC siguiente, y aparecía "adelantada" un
         // día en la racha/calendario. Hay que convertir a America/Bogota ANTES de
         // sacar la fecha.
-        $byDay = MedicationIntakeLog::where('medication_id', $medication->id)
-            ->orderByDesc('scheduled_datetime')
-            ->get()
+        $byDay = $query->get()
             ->groupBy(fn (MedicationIntakeLog $log) => $log->scheduled_datetime->copy()->timezone('America/Bogota')->toDateString());
 
         $streak = 0;

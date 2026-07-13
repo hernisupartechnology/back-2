@@ -9,7 +9,6 @@ use App\Models\MedicalDocument;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -26,7 +25,9 @@ class MedicalDocumentController extends Controller
 
     private const MAX_SIZE_KB = 10240; // 10MB
 
-    public function index(Request $request): AnonymousResourceCollection
+    private const PER_PAGE = 24;
+
+    public function index(Request $request): JsonResponse
     {
         $visibleIds = $this->visibleUserIds($request->user());
 
@@ -51,7 +52,20 @@ class MedicalDocumentController extends Controller
             $query->where(fn ($q) => $q->where('title', 'like', $term)->orWhere('description', 'like', $term));
         }
 
-        return MedicalDocumentResource::collection($query->orderByDesc('document_date')->orderByDesc('uploaded_at')->get());
+        // Forma plana (data/current_page/last_page/...), consistente con
+        // NotificationController/MedicalLeaveController — la galería de
+        // documentos de un paciente crónico con años de historial puede
+        // acumular cientos de archivos.
+        $documents = $query->orderByDesc('document_date')->orderByDesc('uploaded_at')
+            ->paginate(min(60, $request->integer('per_page') ?: self::PER_PAGE));
+
+        return response()->json([
+            'data' => MedicalDocumentResource::collection($documents->items()),
+            'current_page' => $documents->currentPage(),
+            'last_page' => $documents->lastPage(),
+            'per_page' => $documents->perPage(),
+            'total' => $documents->total(),
+        ]);
     }
 
     public function store(Request $request): JsonResponse

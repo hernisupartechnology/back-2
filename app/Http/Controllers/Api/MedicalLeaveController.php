@@ -9,13 +9,14 @@ use App\Models\MedicalLeave;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 
 class MedicalLeaveController extends Controller
 {
     use ScopesVisibleUsers;
 
-    public function index(Request $request): AnonymousResourceCollection
+    private const PER_PAGE = 20;
+
+    public function index(Request $request): JsonResponse
     {
         $visibleIds = $this->visibleUserIds($request->user());
 
@@ -33,7 +34,17 @@ class MedicalLeaveController extends Controller
             $query->where('end_date', '<=', $request->date('to'));
         }
 
-        return MedicalLeaveResource::collection($query->orderByDesc('start_date')->get());
+        // Forma plana (data/current_page/last_page/...) para ser consistente con
+        // NotificationController — el único otro endpoint paginado de la app.
+        $leaves = $query->orderByDesc('start_date')->paginate(min(50, $request->integer('per_page') ?: self::PER_PAGE));
+
+        return response()->json([
+            'data' => MedicalLeaveResource::collection($leaves->items()),
+            'current_page' => $leaves->currentPage(),
+            'last_page' => $leaves->lastPage(),
+            'per_page' => $leaves->perPage(),
+            'total' => $leaves->total(),
+        ]);
     }
 
     public function store(Request $request): JsonResponse

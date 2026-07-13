@@ -36,7 +36,17 @@ class VitalSignController extends Controller
             $query->where('measurement_date', '<=', $request->date('to'));
         }
 
-        return VitalSignResource::collection($query->orderByDesc('measurement_date')->get());
+        $query->orderByDesc('measurement_date');
+
+        // Opcional: para un paciente crónico con años de mediciones, algunas
+        // vistas (ej. el gráfico de últimas 12 lecturas) solo necesitan las
+        // más recientes — sin este parámetro el comportamiento es igual que
+        // antes (trae todo, retrocompatible).
+        if ($request->filled('limit')) {
+            $query->limit($request->integer('limit'));
+        }
+
+        return VitalSignResource::collection($query->get());
     }
 
     public function store(Request $request): JsonResponse

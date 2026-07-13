@@ -49,6 +49,13 @@ class MedicationIntakeController extends Controller
             $query->where('scheduled_datetime', '<=', $request->date('to'));
         }
 
+        // Un medicamento crónico de años acumula miles de logs (uno por
+        // toma programada) — sin `from`/`to` ni `limit`, esto no tiene tope.
+        // Nadie en el frontend llama este endpoint todavía (el calendario de
+        // adherencia usa /medications/{id}/adherence, ya con agregados SQL),
+        // pero se deja acotado por defecto para cualquier futuro consumidor.
+        $query->limit($request->filled('limit') ? min(500, $request->integer('limit')) : 200);
+
         return response()->json(['intake_logs' => $query->get()]);
     }
 

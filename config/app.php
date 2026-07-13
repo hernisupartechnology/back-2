@@ -56,6 +56,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Frontend URL
+    |--------------------------------------------------------------------------
+    |
+    | La SPA vive en un subdominio/origen distinto al de esta API (ver
+    | config/cors.php, que usa el mismo FRONTEND_URL). Se centraliza acá para
+    | poder linkear a la app desde correos (invitaciones, etc.) sin usar
+    | env() fuera de un archivo de config.
+    |
+    */
+
+    'frontend_url' => env('FRONTEND_URL', 'http://localhost:5173'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Application Timezone
     |--------------------------------------------------------------------------
     |

@@ -60,6 +60,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/current', [HouseholdController::class, 'current']);
         Route::put('/{id}', [HouseholdController::class, 'update']);
         Route::get('/{id}/members', [HouseholdController::class, 'members']);
+        Route::post('/{id}/managed-members', [HouseholdController::class, 'createManagedMember']);
+        Route::put('/{id}/managed-members/{userId}', [HouseholdController::class, 'updateManagedMember']);
         Route::post('/invite', [HouseholdController::class, 'invite']);
         Route::post('/join', [HouseholdController::class, 'join']);
         Route::put('/{id}/members/{userId}/role', [HouseholdController::class, 'updateRole']);
